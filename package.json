@@ -1,0 +1,10 @@
+{
+  "name": "centspy-backend",
+  "version": "1.0.0",
+  "description": "CentSpy backend API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {}
+}
