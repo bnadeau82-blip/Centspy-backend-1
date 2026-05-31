@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     // Send ONLY storeId OR zipcode — never both
     const input = storeId
       ? { storeId: String(storeId) }
-      : { zipcode: String(zipCode) }; // lowercase 'zipcode' matches Apify actor field name
+      : { zipcode: String(zipCode) };
 
     const runRes = await fetch('https://api.apify.com/v2/acts/scrapyspider~home-depot-clearance-scraper/runs?token=' + APIFY_KEY, {
       method: 'POST',
@@ -25,10 +25,12 @@ export default async function handler(req, res) {
         parallelRequests: 3
       })
     });
+
     const runData = await runRes.json();
     if (!runData.data?.id) throw new Error('Failed to start scraper');
     const runId = runData.data.id;
 
+    // Poll until done
     let attempts = 0;
     while (attempts < 40) {
       await new Promise(r => setTimeout(r, 3000));
@@ -38,32 +40,43 @@ export default async function handler(req, res) {
       attempts++;
     }
 
-    const items = await (await fetch('https://api.apify.com/v2/actor-runs/' + runId + '/dataset/items?token=' + APIFY_KEY + '&limit=100')).json();
+    const items = await (await fetch(
+      'https://api.apify.com/v2/actor-runs/' + runId + '/dataset/items?token=' + APIFY_KEY + '&limit=100'
+    )).json();
 
-    const processed = items.map(item => {
-      const price = item.price ?? item.pricing?.value ?? 0;
-      const original = item.originalPrice ?? item.pricing?.original?.value ?? 0;
-      const pct = original > 0 ? Math.round(((original - price) / original) * 100) : 0;
-      const isPenny = price <= 0.03;
-      return {
-        name: item.name ?? item.identifiers?.productLabel ?? 'Unknown',
-        brand: item.brand ?? item.identifiers?.brandName ?? '',
-        retail: original,
-        price,
-        pct,
-        score: isPenny ? 85 : Math.min(85, 40 + pct / 2),
-        stock: item.availability ?? item.inventory?.quantity ?? 0,
-        aisle: item.aisle ?? item.location?.aisle ?? null,
-        bay: item.bay ?? item.location?.bay ?? null,
-        sku: item.sku ?? item.identifiers?.storeSkuNumber ?? '',
-        upc: item.upc ?? item.identifiers?.upc ?? '',
-        itemId: item.itemId ?? '',
-        store: 'Store #' + (storeId || ''),
-        isPenny,
-        image: item.image ?? item.media?.images?.[0]?.url ?? '',
-        url: item.url ?? ('https://homedepot.com' + (item.identifiers?.canonicalUrl || ''))
-      };
-    });
+    const processed = items
+      .filter(item => item.isClearanceItem === true) // only real clearance items
+      .map(item => {
+        // Use clearance price if available, fall back to regular price
+        const price = item.pricing?.clearance?.value ?? item.pricing?.value ?? 0;
+        const original = item.pricing?.original ?? item.pricing?.value ?? 0;
+        const pct = item.pricing?.clearance?.percentageOff ?? 
+          (original > 0 && price > 0 ? Math.round(((original - price) / original) * 100) : 0);
+        const dollarOff = item.pricing?.clearance?.dollarOff ?? 0;
+        const isPenny = price <= 0.03;
+
+        return {
+          name: item.identifiers?.productLabel ?? 'Unknown',
+          brand: item.identifiers?.brandName ?? '',
+          retail: original,
+          price,
+          pct,
+          dollarOff,
+          score: isPenny ? 85 : Math.min(85, 40 + pct / 2),
+          stock: item.inventory?.quantity ?? 0,
+          aisle: item.location?.aisle ?? null,
+          bay: item.location?.bay ?? null,
+          sku: item.identifiers?.storeSkuNumber ?? '',
+          upc: item.identifiers?.upc ?? '',
+          itemId: item.identifiers?.itemId ?? item.itemId ?? '',
+          store: 'Store #' + (storeId || ''),
+          isPenny,
+          isClearanceItem: true,
+          image: item.media?.images?.[0]?.url ?? '',
+          url: item.URL ?? ('https://homedepot.com' + (item.identifiers?.canonicalUrl || '')),
+          category: item.categoryTitle ?? '',
+        };
+      });
 
     return res.status(200).json({ success: true, items: processed, total: processed.length });
   } catch (e) {
