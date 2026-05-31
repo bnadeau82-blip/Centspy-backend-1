@@ -11,72 +11,56 @@ export default async function handler(req, res) {
   if (!APIFY_KEY) return res.status(500).json({ error: 'No Apify key' });
 
   try {
-    // Send ONLY storeId OR zipcode — never both
     const input = storeId
-      ? { storeId: String(storeId) }
-      : { zipcode: String(zipCode) };
+      ? { storeId: String(storeId), maxResults: 100 }
+      : { zipcode: String(zipCode), maxResults: 100 };
 
-    const runRes = await fetch('https://api.apify.com/v2/acts/scrapyspider~home-depot-clearance-scraper/runs?token=' + APIFY_KEY, {
+    const ACTOR_ID = 'centspy~my-actor';
+
+    const runRes = await fetch(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...input,
-        maxResults: 100,
-        parallelRequests: 3
-      })
+      body: JSON.stringify(input)
     });
 
     const runData = await runRes.json();
     if (!runData.data?.id) throw new Error('Failed to start scraper');
     const runId = runData.data.id;
 
-    // Poll until done
     let attempts = 0;
     while (attempts < 40) {
       await new Promise(r => setTimeout(r, 3000));
-      const s = await (await fetch('https://api.apify.com/v2/actor-runs/' + runId + '?token=' + APIFY_KEY)).json();
+      const s = await (await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_KEY}`)).json();
       if (s.data?.status === 'SUCCEEDED') break;
       if (s.data?.status === 'FAILED') throw new Error('Scraper failed');
       attempts++;
     }
 
     const items = await (await fetch(
-      'https://api.apify.com/v2/actor-runs/' + runId + '/dataset/items?token=' + APIFY_KEY + '&limit=100'
+      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_KEY}&limit=100`
     )).json();
 
-    const processed = items
-      .filter(item => item.isClearanceItem === true) // only real clearance items
-      .map(item => {
-        // Use clearance price if available, fall back to regular price
-        const price = item.pricing?.clearance?.value ?? item.pricing?.value ?? 0;
-        const original = item.pricing?.original ?? item.pricing?.value ?? 0;
-        const pct = item.pricing?.clearance?.percentageOff ?? 
-          (original > 0 && price > 0 ? Math.round(((original - price) / original) * 100) : 0);
-        const dollarOff = item.pricing?.clearance?.dollarOff ?? 0;
-        const isPenny = price <= 0.03;
-
-        return {
-          name: item.identifiers?.productLabel ?? 'Unknown',
-          brand: item.identifiers?.brandName ?? '',
-          retail: original,
-          price,
-          pct,
-          dollarOff,
-          score: isPenny ? 85 : Math.min(85, 40 + pct / 2),
-          stock: item.inventory?.quantity ?? 0,
-          aisle: item.location?.aisle ?? null,
-          bay: item.location?.bay ?? null,
-          sku: item.identifiers?.storeSkuNumber ?? '',
-          upc: item.identifiers?.upc ?? '',
-          itemId: item.identifiers?.itemId ?? item.itemId ?? '',
-          store: 'Store #' + (storeId || ''),
-          isPenny,
-          isClearanceItem: true,
-          image: item.media?.images?.[0]?.url ?? '',
-          url: item.URL ?? ('https://homedepot.com' + (item.identifiers?.canonicalUrl || '')),
-          category: item.categoryTitle ?? '',
-        };
-      });
+    const processed = items.map(item => ({
+      name: item.name || 'Unknown',
+      brand: item.brand || '',
+      price: item.price || 0,
+      retail: item.retail || 0,
+      pct: item.pct || 0,
+      dollarOff: item.dollarOff || 0,
+      isPenny: item.isPenny || false,
+      isClearanceItem: item.isClearanceItem || false,
+      stock: item.stock || 0,
+      inStock: item.inStock || false,
+      aisle: item.aisle || null,
+      bay: item.bay || null,
+      sku: item.sku || '',
+      upc: item.upc || '',
+      itemId: item.itemId || '',
+      store: item.store || '',
+      image: item.image || '',
+      url: item.url || '',
+      score: item.isPenny ? 85 : Math.min(85, 40 + (item.pct || 0) / 2),
+    }));
 
     return res.status(200).json({ success: true, items: processed, total: processed.length });
   } catch (e) {
