@@ -15,8 +15,26 @@ export default async function handler(req, res) {
     const ACTOR_ID = 'scrapyspider~home-depot-clearance-scraper';
 
     const input = storeId
-      ? { storeId: String(storeId) }
-      : { zipCode: String(zipCode) };
+      ? {
+          storeId: String(storeId),
+          maxResults: 200,
+          parallelRequests: 3,
+          proxyConfig: {
+            useApifyProxy: true,
+            apifyProxyGroups: ['RESIDENTIAL'],
+            apifyProxyCountry: 'US',
+          }
+        }
+      : {
+          zipcode: String(zipCode),
+          maxResults: 200,
+          parallelRequests: 3,
+          proxyConfig: {
+            useApifyProxy: true,
+            apifyProxyGroups: ['RESIDENTIAL'],
+            apifyProxyCountry: 'US',
+          }
+        };
 
     const runRes = await fetch(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_KEY}`, {
       method: 'POST',
@@ -28,9 +46,9 @@ export default async function handler(req, res) {
     if (!runData.data?.id) throw new Error('Failed to start scraper');
     const runId = runData.data.id;
 
-    // Poll for completion — up to 60 attempts × 5s = 5 minutes
+    // Poll for completion — up to 180 attempts × 5s = 15 minutes
     let attempts = 0;
-    while (attempts < 60) {
+    while (attempts < 180) {
       await new Promise(r => setTimeout(r, 5000));
       const s = await (await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_KEY}`)).json();
       if (s.data?.status === 'SUCCEEDED') break;
@@ -38,7 +56,7 @@ export default async function handler(req, res) {
       attempts++;
     }
 
-    if (attempts >= 60) throw new Error('Scraper timed out');
+    if (attempts >= 180) throw new Error('Scraper timed out after 15 minutes');
 
     // Fetch up to 1000 items then filter down
     const items = await (await fetch(
