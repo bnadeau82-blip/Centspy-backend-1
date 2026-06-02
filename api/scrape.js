@@ -11,12 +11,12 @@ export default async function handler(req, res) {
   if (!APIFY_KEY) return res.status(500).json({ error: 'No Apify key' });
 
   try {
-    // FIX: never send both storeId and zipCode — prefer storeId
-    const input = storeId
-      ? { storeId: String(storeId), maxResults: 100 }
-      : { zipcode: String(zipCode), maxResults: 100 };
+    // Use scrapyspider actor which successfully bypasses HD bot detection
+    const ACTOR_ID = 'scrapyspider~home-depot-clearance-scraper';
 
-    const ACTOR_ID = 'centspy~my-actor';
+    const input = storeId
+      ? { storeId: String(storeId) }
+      : { zipCode: String(zipCode) };
 
     const runRes = await fetch(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_KEY}`, {
       method: 'POST',
@@ -28,50 +28,66 @@ export default async function handler(req, res) {
     if (!runData.data?.id) throw new Error('Failed to start scraper');
     const runId = runData.data.id;
 
-    // Poll for completion — up to 40 attempts × 3s = 2 minutes
+    // Poll for completion — up to 60 attempts × 5s = 5 minutes
     let attempts = 0;
-    while (attempts < 40) {
-      await new Promise(r => setTimeout(r, 3000));
+    while (attempts < 60) {
+      await new Promise(r => setTimeout(r, 5000));
       const s = await (await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_KEY}`)).json();
       if (s.data?.status === 'SUCCEEDED') break;
       if (s.data?.status === 'FAILED') throw new Error('Scraper failed');
       attempts++;
     }
 
-    if (attempts >= 40) throw new Error('Scraper timed out after 2 minutes');
+    if (attempts >= 60) throw new Error('Scraper timed out');
 
+    // Fetch up to 1000 items then filter down
     const items = await (await fetch(
-      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_KEY}&limit=100`
+      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_KEY}&limit=1000`
     )).json();
 
-    const processed = items.map(item => ({
-      name: item.name || 'Unknown',
-      brand: item.brand || '',
-      price: item.price || 0,
-      retail: item.retail || 0,
-      pct: item.pct || 0,
-      dollarOff: item.dollarOff || 0,   // FIX: was always 0 before because actor never sent it
-      isPenny: item.isPenny || false,
-      isClearanceItem: item.isClearanceItem || false,
-      stock: item.stock || 0,
-      inStock: item.inStock || false,
-      aisle: item.aisle || null,
-      bay: item.bay || null,
-      sku: item.sku || '',
-      upc: item.upc || '',
-      itemId: item.itemId || '',
-      store: item.store || '',
-      image: item.image || '',
-      url: item.url || '',
-      // FIX: score now uses dollarOff as a signal too, not just pct
-      score: item.isPenny
-        ? 85
-        : Math.min(85, Math.round(
-            (item.pct || 0) * 0.6 +
-            Math.min(25, ((item.dollarOff || 0) / 10)) +
-            (item.inStock ? 10 : 0)
-          )),
-    }));
+    // Filter to only true clearance items
+    const clearanceOnly = items.filter(item => item.isClearanceItem === true);
+
+    const processed = clearanceOnly.map(item => {
+      const clearancePrice = item.pricing?.clearance?.value ?? null;
+      const regularPrice = item.pricing?.value ?? 0;
+      const originalPrice = item.pricing?.original ?? regularPrice;
+      const price = clearancePrice !== null ? clearancePrice : regularPrice;
+      const pct = item.pricing?.clearance?.percentageOff ?? 0;
+      const dollarOff = item.pricing?.clearance?.dollarOff ?? 0;
+      const isPenny = price > 0 && price <= 0.03;
+
+      return {
+        name: item.identifiers?.productLabel || 'Unknown',
+        brand: item.identifiers?.brandName || '',
+        price: price,
+        retail: originalPrice,
+        pct: pct,
+        dollarOff: dollarOff,
+        isPenny: isPenny,
+        isClearanceItem: true,
+        stock: item.availability?.quantity ?? 0,
+        inStock: item.availability?.status ?? false,
+        aisle: item.location?.aisle ?? null,
+        bay: item.location?.bay ?? null,
+        sku: item.identifiers?.storeSkuNumber || '',
+        upc: item.identifiers?.upc || '',
+        itemId: item.itemId || '',
+        store: item.storeName || (storeId ? 'Store #' + storeId : 'Near ' + zipCode),
+        image: item.media?.images?.[0]?.url || '',
+        url: item.URL || '',
+        score: isPenny
+          ? 85
+          : Math.min(85, Math.round(
+              (pct || 0) * 0.6 +
+              Math.min(25, (dollarOff || 0) / 10) +
+              (item.availability?.status ? 10 : 0)
+            )),
+      };
+    });
+
+    // Sort by price ascending (penny items first)
+    processed.sort((a, b) => a.price - b.price);
 
     return res.status(200).json({ success: true, items: processed, total: processed.length });
   } catch (e) {
