@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     const input = storeId
       ? {
           storeId: String(storeId),
-          maxResults: 200,
+          maxResults: 2000,
           parallelRequests: 3,
           proxyConfig: {
             useApifyProxy: true,
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
         }
       : {
           zipcode: String(zipCode),
-          maxResults: 200,
+          maxResults: 2000,
           parallelRequests: 3,
           proxyConfig: {
             useApifyProxy: true,
