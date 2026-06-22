@@ -11,8 +11,7 @@ export default async function handler(req, res) {
   if (!APIFY_KEY) return res.status(500).json({ error: 'No Apify key' });
 
   try {
-    // Use scrapyspider actor which successfully bypasses HD bot detection
-    const ACTOR_ID = 'scrapyspider~home-depot-clearance-scraper';
+    const ACTOR_ID = 'centspy~my-actor';
 
     const input = storeId
       ? {
@@ -46,7 +45,6 @@ export default async function handler(req, res) {
     if (!runData.data?.id) throw new Error('Failed to start scraper');
     const runId = runData.data.id;
 
-    // Poll for completion — up to 180 attempts × 5s = 15 minutes
     let attempts = 0;
     while (attempts < 180) {
       await new Promise(r => setTimeout(r, 5000));
@@ -58,12 +56,10 @@ export default async function handler(req, res) {
 
     if (attempts >= 180) throw new Error('Scraper timed out after 15 minutes');
 
-    // Fetch up to 1000 items then filter down
     const items = await (await fetch(
       `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_KEY}&limit=1000`
     )).json();
 
-    // Filter to only true clearance items
     const clearanceOnly = items.filter(item => item.isClearanceItem === true);
 
     const processed = clearanceOnly.map(item => {
@@ -104,7 +100,6 @@ export default async function handler(req, res) {
       };
     });
 
-    // Sort by price ascending (penny items first)
     processed.sort((a, b) => a.price - b.price);
 
     return res.status(200).json({ success: true, items: processed, total: processed.length });
