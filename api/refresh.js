@@ -26,7 +26,7 @@ export default async function handler(req, res) {
   try {
     // Fetch latest successful run dataset
     const datasetRes = await fetch(
-      `https://api.apify.com/v2/acts/${ACTOR_ID}/runs/last/dataset/items?token=${APIFY_TOKEN}&status=SUCCEEDED`,
+  `https://api.apify.com/v2/acts/${ACTOR_ID}/runs/last/dataset/items?token=${APIFY_TOKEN}`,
       { headers: { 'Content-Type': 'application/json' } }
     );
 
