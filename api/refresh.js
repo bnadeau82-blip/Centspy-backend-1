@@ -2,7 +2,7 @@ export const config = { maxDuration: 300 };
 
 const SUPABASE_URL = 'https://iumkmbrgtoorpehfvkpl.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1bWttYnJndG9vcnBlaGZ2a3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIwODUwNDAsImV4cCI6MjA5NzY2MTA0MH0.GJt_QrUq4opjgWWHavDEocvkK0QwboVM95WNN8wX4Ts';
-const APIFY_TOKEN = process.env.APIFY_TOKEN;
+const APIFY_TOKEN = process.env.APIFY_KEY;
 const ACTOR_ID = 'u0ILpsfZLtIpQ4gIL';
 
 async function upsertBatch(table, rows) {
