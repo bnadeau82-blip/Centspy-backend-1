@@ -1,5 +1,8 @@
 export const config = { maxDuration: 300 };
 
+const SUPABASE_URL = 'https://iumkmbrgtoorpehfvkpl.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1bWttYnJndG9vcnBlaGZ2a3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIwODUwNDAsImV4cCI6MjA5NzY2MTA0MH0.GJt_QrUq4opjgWWHavDEocvkK0QwboVM95WNN8wX4Ts';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -7,100 +10,55 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const { storeId, zipCode, type } = req.body || {};
-  const APIFY_KEY = process.env.APIFY_KEY;
-  if (!APIFY_KEY) return res.status(500).json({ error: 'No Apify key' });
 
   try {
-    const ACTOR_ID = 'centspy~my-actor';
+    let query = `${SUPABASE_URL}/rest/v1/penny_items?current_price=lte.0.03&order=score.desc&limit=500`;
 
-    const input = storeId
-      ? {
-          storeId: String(storeId),
-          maxResults: 2000,
-          parallelRequests: 3,
-          proxyConfig: {
-            useApifyProxy: true,
-            apifyProxyGroups: ['RESIDENTIAL'],
-            apifyProxyCountry: 'US',
-          }
-        }
-      : {
-          zipcode: String(zipCode),
-          maxResults: 2000,
-          parallelRequests: 3,
-          proxyConfig: {
-            useApifyProxy: true,
-            apifyProxyGroups: ['RESIDENTIAL'],
-            apifyProxyCountry: 'US',
-          }
-        };
-
-    const runRes = await fetch(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input)
-    });
-
-    const runData = await runRes.json();
-    if (!runData.data?.id) throw new Error('Failed to start scraper');
-    const runId = runData.data.id;
-
-    let attempts = 0;
-    while (attempts < 180) {
-      await new Promise(r => setTimeout(r, 5000));
-      const s = await (await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_KEY}`)).json();
-      if (s.data?.status === 'SUCCEEDED') break;
-      if (s.data?.status === 'FAILED') throw new Error('Scraper failed');
-      attempts++;
+    if (storeId) {
+      query += `&store_id=eq.${storeId}`;
+    } else if (zipCode) {
+      // For zip code searches return all OK stores for now
+      query += `&store_state=eq.OK`;
     }
 
-    if (attempts >= 180) throw new Error('Scraper timed out after 15 minutes');
-
-    const items = await (await fetch(
-      `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_KEY}&limit=1000`
-    )).json();
-
-    const clearanceOnly = items.filter(item => item.isClearanceItem === true);
-
-    const processed = clearanceOnly.map(item => {
-      const clearancePrice = item.pricing?.clearance?.value ?? null;
-      const regularPrice = item.pricing?.value ?? 0;
-      const originalPrice = item.pricing?.original ?? regularPrice;
-      const price = clearancePrice !== null ? clearancePrice : regularPrice;
-      const pct = item.pricing?.clearance?.percentageOff ?? 0;
-      const dollarOff = item.pricing?.clearance?.dollarOff ?? 0;
-      const isPenny = price > 0 && price <= 0.03;
-
-      return {
-        name: item.identifiers?.productLabel || 'Unknown',
-        brand: item.identifiers?.brandName || '',
-        price: price,
-        retail: originalPrice,
-        pct: pct,
-        dollarOff: dollarOff,
-        isPenny: isPenny,
-        isClearanceItem: true,
-        stock: item.availability?.quantity ?? 0,
-        inStock: item.availability?.status ?? false,
-        aisle: item.location?.aisle ?? null,
-        bay: item.location?.bay ?? null,
-        sku: item.identifiers?.storeSkuNumber || '',
-        upc: item.identifiers?.upc || '',
-        itemId: item.itemId || '',
-        store: item.storeName || (storeId ? 'Store #' + storeId : 'Near ' + zipCode),
-        image: item.media?.images?.[0]?.url || '',
-        url: item.URL || '',
-        score: isPenny
-          ? 85
-          : Math.min(85, Math.round(
-              (pct || 0) * 0.6 +
-              Math.min(25, (dollarOff || 0) / 10) +
-              (item.availability?.status ? 10 : 0)
-            )),
-      };
+    const response = await fetch(query, {
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json'
+      }
     });
 
-    processed.sort((a, b) => a.price - b.price);
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error('Supabase error: ' + err);
+    }
+
+    const items = await response.json();
+
+    const processed = items.map(item => ({
+      name: item.item_name || 'Unknown',
+      brand: item.brand || '',
+      price: item.current_price,
+      retail: item.store_retail_price || item.previous_price || 0,
+      pct: item.store_retail_price ? Math.round(((item.store_retail_price - item.current_price) / item.store_retail_price) * 100) : 0,
+      dollarOff: item.store_retail_price ? Math.round((item.store_retail_price - item.current_price) * 100) / 100 : 0,
+      isPenny: item.current_price <= 0.03,
+      isClearanceItem: true,
+      stock: item.current_stock || 0,
+      inStock: (item.current_stock || 0) > 0,
+      aisle: item.location || null,
+      bay: null,
+      sku: item.store_sku || '',
+      upc: item.upc || '',
+      itemId: item.item_id || '',
+      store: item.store_name || 'Store #' + item.store_id,
+      image: item.image_link || '',
+      url: item.product_link || '',
+      score: item.score || 0,
+      category: item.category || '',
+      lastUpdated: item.price_last_updated || item.current_update || '',
+    }));
 
     return res.status(200).json({ success: true, items: processed, total: processed.length });
   } catch (e) {
