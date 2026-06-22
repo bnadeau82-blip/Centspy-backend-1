@@ -1,7 +1,10 @@
 {
   "functions": {
-    "api/scrape.js": {
-      "maxDuration": 300
-    }
-  }
+    "api/scrape.js": { "maxDuration": 300 },
+    "api/refresh.js": { "maxDuration": 300 }
+  },
+  "crons": [{
+    "path": "/api/refresh",
+    "schedule": "0 8 * * *"
+  }]
 }
