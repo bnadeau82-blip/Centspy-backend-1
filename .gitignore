@@ -1,0 +1,8 @@
+proxy.json
+seed-*.js
+seed-*.json
+*.seed.js
+*.seed.json
+node_modules/
+.env
+.env.local
